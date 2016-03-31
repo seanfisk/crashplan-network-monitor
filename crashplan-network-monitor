@@ -1,0 +1,99 @@
+#!/usr/bin/python
+
+# Python 2.7 syntax
+
+from __future__ import (
+    print_function, unicode_literals, division, absolute_import)
+import subprocess
+import argparse
+import logging
+import os
+import pwd
+import sys
+from pipes import quote as shquote
+
+arg_parser = argparse.ArgumentParser(
+    description='CrashPlan network monitor',
+    epilog=('Disable the CrashPlan backup service when using a specific Wi-Fi '
+            'network.'))
+arg_parser.add_argument(
+    '--user', help=
+    'system username of the CrashPlan user; only applicable if run as root')
+arg_parser.add_argument('interface', help='network interface to check')
+arg_parser.add_argument('ssid', help='Wi-Fi network name on which to disable')
+
+args = arg_parser.parse_args()
+
+DOMAIN = 'com.crashplan.engine'
+IS_ROOT = os.getuid() == 0
+if IS_ROOT and args.user is None:
+    sys.exit('Error: --user USER must be passed if run as root')
+# For paths, see here:
+# https://support.code42.com/CrashPlan/4/Troubleshooting/Stopping_And_Starting_The_CrashPlan_Service#Advanced_Restart_Process
+PLIST = (
+    '/Library/LaunchDaemons/{}.plist'.format(DOMAIN) if IS_ROOT
+    else os.path.expanduser('~/Library/LaunchAgents/{}.plist'.format(DOMAIN)))
+
+logging.basicConfig(
+    level=logging.DEBUG, format='[%(asctime)s] %(levelname)s %(message)s')
+
+logging.debug('Starting run')
+
+def launchctl(*args):
+    with open(os.devnull, 'wb') as devnull:
+        subprocess.check_call(['/bin/launchctl'] + list(args),
+                              stdout=devnull, stderr=devnull)
+
+def notify(message):
+    osa_args = ['/usr/bin/osascript', '-e',
+                ('display notification "CrashPlan service {}"'
+                 ' with title "CrashPlan Network Monitor"').format(
+                     message.replace('"', r'\"'))]
+    if IS_ROOT:
+        # Here, 'sudo' and 'su' do not work properly, but 'launchctl asuser' does!
+        # This command takes a UID.
+        launchctl('asuser', str(pwd.getpwnam(args.user).pw_uid), *osa_args)
+    else:
+        subprocess.check_call(osa_args)
+
+# This could be done with plain 'subprocess.call()', but this is easier because
+# 'launchctl()' uses 'subprocess.check_call()'.
+try:
+    launchctl('list', DOMAIN)
+except subprocess.CalledProcessError:
+    crash_plan_is_running = False
+else:
+    crash_plan_is_running = True
+logging.debug('CrashPlan service is {}running'.format(
+    '' if crash_plan_is_running else 'not '))
+on_wifi_network = (
+    subprocess.check_output([
+        '/usr/sbin/networksetup', '-getairportnetwork', args.interface
+    ]).rstrip() == 'Current Wi-Fi Network: {}'.format(args.ssid))
+logging.debug("SSID does {}match '{}'".format(
+    '' if on_wifi_network else 'not ', args.ssid))
+if on_wifi_network and crash_plan_is_running:
+    logging.info('Stopping CrashPlan service')
+    launchctl('unload', PLIST)
+    notify('stopped')
+elif not on_wifi_network and not crash_plan_is_running:
+    logging.info('Starting CrashPlan service')
+    launchctl('load', PLIST)
+    notify('started')
+    logging.info('Starting CrashPlan menu bar')
+    open_args = '/usr/bin/open', '-a', 'CrashPlan menu bar'
+    if IS_ROOT:
+        # To get the right execution context here, we need to execute this
+        # command in the context of the logged-in user. It sort of works with
+        # 'sudo', launching the app but with 'open' exiting in failure.
+        # 'launchctl asuser' has the same results as 'sudo'. 'su' works
+        # reliably, though.
+        #
+        # 'su' can only take a user name.
+        subprocess.check_call([
+            'su', args.user, '-c', ' '.join(shquote(arg) for arg in open_args)
+        ])
+    else:
+        subprocess.check_call(args)
+else:
+    logging.debug('State has not changed; taking no action')

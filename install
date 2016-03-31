@@ -1,0 +1,104 @@
+#!/usr/bin/python
+
+# Python 2.7 syntax
+
+from __future__ import (
+    print_function, unicode_literals, division, absolute_import)
+import subprocess
+import re
+import argparse
+import os
+import sys
+from plistlib import writePlist
+from collections import OrderedDict
+import shutil
+import errno
+
+def yes_no(message):
+    while True:
+        response = raw_input('{} (y/n) [y]: '.format(message))
+        if response in ('y', 'n', ''):
+            return response != 'n'
+        print('Please answer y or n.')
+
+arg_parser = argparse.ArgumentParser(
+    description='CrashPlan network monitor installer',
+    epilog=('Run as root if you installed CrashPlan for all users, '
+            'or as your user if you installed just for you.'))
+arg_parser.add_argument(
+    '--interface', default='en1',
+    help='network interface to check [default: %(default)s]')
+# We do want os.getlogin() here, because we want the name of the *standard*
+# user (not root) who is using CrashPlan. This is the user to which we will
+# send our notifications and on whose behalf we will start the menu bar.
+arg_parser.add_argument(
+    '--user', default=os.getlogin(),
+    help='name of standard CrashPlan user if run as root '
+    '[default: %(default)s]')
+arg_parser.add_argument('--interval', default=1, type=int,
+                        help='minutes between runs [default: %(default)s]')
+arg_parser.add_argument('ssid', help='Wi-Fi network name on which to disable')
+
+args = arg_parser.parse_args()
+
+DOMAIN = 'com.seanfisk.crashplan-network-monitor'
+IS_ROOT = os.getuid() == 0
+PLIST_INSTALL_PATH = os.path.join('/' if IS_ROOT else os.path.expanduser('~'),
+                                  'Library', 'LaunchAgents', DOMAIN + '.plist')
+LOGFILE_PATH = os.path.join('/' if IS_ROOT else os.path.expanduser('~'),
+                            'Library', 'Logs', DOMAIN + '.log')
+
+EXE_BASE = 'crashplan-network-monitor'
+EXE_INSTALL_DIR = '/usr/libexec' if IS_ROOT else os.path.expanduser('~/bin')
+EXE_INSTALL_PATH = os.path.join(EXE_INSTALL_DIR, EXE_BASE)
+
+print('Plist will be installed to:', PLIST_INSTALL_PATH)
+print('Executable will be installed to:', EXE_INSTALL_PATH)
+print('Log will be written to:', LOGFILE_PATH)
+print()
+
+if not yes_no('Is this ok?'):
+    sys.exit('Exiting without installing.')
+
+try:
+    os.makedirs(EXE_INSTALL_DIR)
+except OSError as exc:
+    if exc.errno != errno.EEXIST:
+        raise
+shutil.copyfile(EXE_BASE, EXE_INSTALL_PATH)
+os.chmod(EXE_INSTALL_PATH, 0o755)
+exe_args = [EXE_INSTALL_PATH, args.interface, args.ssid]
+if IS_ROOT:
+    exe_args += ['--user', args.user]
+writePlist(
+    OrderedDict([
+        ('Label', DOMAIN),
+        ('ProgramArguments', exe_args),
+        ('StartInterval', args.interval * 60),
+        ('StandardErrorPath', LOGFILE_PATH)
+    ]),
+    PLIST_INSTALL_PATH)
+os.chmod(PLIST_INSTALL_PATH, 0o644)
+
+print('Installed. Loading agent...')
+
+def launchctl(*args):
+    with open(os.devnull, 'wb') as devnull:
+        subprocess.check_call(['/bin/launchctl'] + list(args),
+                              stdout=devnull, stderr=devnull)
+
+try:
+    launchctl('list', DOMAIN)
+except subprocess.CalledProcessError:
+    pass
+else:
+    if yes_no('Agent is already loaded. Reload?'):
+        launchctl('unload', PLIST_INSTALL_PATH)
+        print('Agent unloaded.')
+    else:
+        print('Exiting without reloading.')
+        sys.exit()
+
+launchctl('load', PLIST_INSTALL_PATH)
+
+print('Agent loaded.')

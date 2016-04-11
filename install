@@ -22,9 +22,7 @@ def yes_no(message):
         print('Please answer y or n.')
 
 arg_parser = argparse.ArgumentParser(
-    description='CrashPlan network monitor installer',
-    epilog=('Run as root if you installed CrashPlan for all users, '
-            'or as your user if you installed just for you.'))
+    description='CrashPlan network monitor installer')
 arg_parser.add_argument(
     '--interface', default='en1',
     help='network interface to check [default: %(default)s]')
@@ -33,24 +31,21 @@ arg_parser.add_argument(
 # send our notifications and on whose behalf we will start the menu bar.
 arg_parser.add_argument(
     '--user', default=os.getlogin(),
-    help='name of standard CrashPlan user if run as root '
-    '[default: %(default)s]')
+    help='name of standard CrashPlan user [default: %(default)s]')
 arg_parser.add_argument('--interval', default=1, type=int,
                         help='minutes between runs [default: %(default)s]')
 arg_parser.add_argument('ssid', help='Wi-Fi network name on which to disable')
 
 args = arg_parser.parse_args()
 
-DOMAIN = 'com.seanfisk.crashplan-network-monitor'
-IS_ROOT = os.getuid() == 0
-PLIST_INSTALL_PATH = os.path.join(
-    '/' if IS_ROOT else os.path.expanduser('~'),
-    'Library', 'LaunchDaemons', DOMAIN + '.plist')
-LOGFILE_PATH = os.path.join('/' if IS_ROOT else os.path.expanduser('~'),
-                            'Library', 'Logs', DOMAIN + '.log')
+if os.getuid() != 0:
+    sys.exit('The install script must be run as root.')
 
+DOMAIN = 'com.seanfisk.crashplan-network-monitor'
+PLIST_INSTALL_PATH = '/Library/LaunchDaemons/{}.plist'.format(DOMAIN)
+LOGFILE_PATH = '/Library/Logs/{}.log'.format(DOMAIN)
 EXE_BASE = 'crashplan-network-monitor'
-EXE_INSTALL_DIR = '/usr/libexec' if IS_ROOT else os.path.expanduser('~/bin')
+EXE_INSTALL_DIR = '/usr/libexec'
 EXE_INSTALL_PATH = os.path.join(EXE_INSTALL_DIR, EXE_BASE)
 
 print('Plist will be installed to:', PLIST_INSTALL_PATH)
@@ -68,13 +63,11 @@ except OSError as exc:
         raise
 shutil.copyfile(EXE_BASE, EXE_INSTALL_PATH)
 os.chmod(EXE_INSTALL_PATH, 0o755)
-exe_args = [EXE_INSTALL_PATH, args.interface, args.ssid]
-if IS_ROOT:
-    exe_args += ['--user', args.user]
 writePlist(
     OrderedDict([
         ('Label', DOMAIN),
-        ('ProgramArguments', exe_args),
+        ('ProgramArguments', [
+            EXE_INSTALL_PATH, args.user, args.interface, args.ssid]),
         ('StartInterval', args.interval * 60),
         ('StandardErrorPath', LOGFILE_PATH)
     ]),

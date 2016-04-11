@@ -43,8 +43,9 @@ args = arg_parser.parse_args()
 
 DOMAIN = 'com.seanfisk.crashplan-network-monitor'
 IS_ROOT = os.getuid() == 0
-PLIST_INSTALL_PATH = os.path.join('/' if IS_ROOT else os.path.expanduser('~'),
-                                  'Library', 'LaunchAgents', DOMAIN + '.plist')
+PLIST_INSTALL_PATH = os.path.join(
+    '/' if IS_ROOT else os.path.expanduser('~'),
+    'Library', 'LaunchDaemons', DOMAIN + '.plist')
 LOGFILE_PATH = os.path.join('/' if IS_ROOT else os.path.expanduser('~'),
                             'Library', 'Logs', DOMAIN + '.log')
 
@@ -80,7 +81,7 @@ writePlist(
     PLIST_INSTALL_PATH)
 os.chmod(PLIST_INSTALL_PATH, 0o644)
 
-print('Installed. Loading agent...')
+print('Installed. Loading daemon...')
 
 def launchctl(*args):
     with open(os.devnull, 'wb') as devnull:
@@ -92,13 +93,13 @@ try:
 except subprocess.CalledProcessError:
     pass
 else:
-    if yes_no('Agent is already loaded. Reload?'):
+    if yes_no('Daemon is already loaded. Reload?'):
         launchctl('unload', PLIST_INSTALL_PATH)
-        print('Agent unloaded.')
+        print('Daemon unloaded.')
     else:
         print('Exiting without reloading.')
         sys.exit()
 
 launchctl('load', PLIST_INSTALL_PATH)
 
-print('Agent loaded.')
+print('Daemon loaded.')
